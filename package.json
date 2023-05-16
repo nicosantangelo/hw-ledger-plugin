@@ -7,5 +7,13 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^2.0.2"
+  },
+  "dependencies": {
+    "@ledgerhq/hw-app-eth": "^6.33.1",
+    "@ledgerhq/hw-transport-node-hid": "^6.27.13",
+    "@nomiclabs/hardhat-ethers": "^2.2.3"
+  }
 }

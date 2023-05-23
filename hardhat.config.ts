@@ -1,6 +1,5 @@
 import "@nomicfoundation/hardhat-toolbox";
 
-import { ProviderWrapper } from "hardhat/plugins";
 import { HardhatUserConfig, extendProvider } from "hardhat/config";
 import {
   EIP1193Provider,
@@ -10,18 +9,21 @@ import {
 
 import TransportNodeHid from "@ledgerhq/hw-transport-node-hid";
 import { TransportError } from "@ledgerhq/errors";
-import Eth from "@ledgerhq/hw-app-eth";
+import Eth, { ledgerService } from "@ledgerhq/hw-app-eth";
+import { EIP712Message } from "@ledgerhq/hw-app-eth/lib/modules/EIP712";
 
 import "@nomiclabs/hardhat-ethers";
 import * as t from "io-ts";
 import { validateParams } from "hardhat/internal/core/jsonrpc/types/input/validation";
+import { rpcTransactionRequest } from "hardhat/internal/core/jsonrpc/types/input/transactionRequest";
 import {
   rpcAddress,
   rpcData,
+  rpcQuantityToBigInt,
 } from "hardhat/internal/core/jsonrpc/types/base-types";
+import { ProviderWrapperWithChainId } from "hardhat/src/internal/core/providers/chainId";
 import { HardhatError } from "hardhat/src/internal/core/errors";
 import { ERRORS } from "hardhat/src/internal/core/errors-list";
-import { EIP712Message } from "@ledgerhq/hw-app-eth/lib/modules/EIP712";
 
 const config: HardhatUserConfig = {
   solidity: "0.8.18",
@@ -34,7 +36,7 @@ export interface LedgerOptions {
   connectionTimeout?: number;
 }
 
-class LedgerProvider extends ProviderWrapper {
+class LedgerProvider extends ProviderWrapperWithChainId {
   public static readonly DEFAULT_TIMEOUT = 3000;
 
   public name: string = "LedgerProvider";
@@ -59,12 +61,14 @@ class LedgerProvider extends ProviderWrapper {
   }
 
   public async request(args: RequestArguments): Promise<unknown> {
-    const { ecsign, hashPersonalMessage, toRpcSig, toBuffer, bufferToHex } =
-      await import("@nomicfoundation/ethereumjs-util");
+    const { toRpcSig, toBuffer, bufferToHex } = await import(
+      "@nomicfoundation/ethereumjs-util"
+    );
 
     const params = this._getParams(args);
 
     if (this._eth === undefined) {
+      // TODO: better error
       throw new Error();
     }
 
@@ -76,12 +80,6 @@ class LedgerProvider extends ProviderWrapper {
       const wallet = await this._eth.getAddress(this.options.path);
       return [wallet.address];
     }
-
-    // You can sign a transaction and retrieve v, r, s given the raw transaction and the BIP 32 path of the account to sign.
-    // const tx = "e8018504e3b292008252089428ee52a8f3d6e5d15f8b131996950d7f296c7952872bd72a2487400080"; // raw tx to sign
-    // const resolution = await ledgerService.resolveTransaction(tx);
-    // const result = eth.signTransaction("44'/60'/0'/0/0", tx, resolution);
-    // console.log(result);
 
     // You can sign a message according to eth_sign RPC call and retrieve v, r, s given the message and the BIP 32 path of the account to sign.
     if (args.method === "personal_sign" || args.method === "eth_sign") {
@@ -175,8 +173,120 @@ class LedgerProvider extends ProviderWrapper {
       );
     }
 
-    // throw if not init?
+    // You can sign a transaction and retrieve v, r, s given the raw transaction and the BIP 32 path of the account to sign.
+    // const tx = "e8018504e3b292008252089428ee52a8f3d6e5d15f8b131996950d7f296c7952872bd72a2487400080"; // raw tx to sign
+    // const resolution = await ledgerService.resolveTransaction(tx);
+    // const result = eth.signTransaction("44'/60'/0'/0/0", tx, resolution);
+    // console.log(result);
+
+    if (args.method === "eth_sendTransaction" && params.length > 0) {
+      const [txRequest] = validateParams(params, rpcTransactionRequest);
+
+      if (txRequest.gas === undefined) {
+        throw new HardhatError(
+          ERRORS.NETWORK.MISSING_TX_PARAM_TO_SIGN_LOCALLY,
+          { param: "gas" }
+        );
+      }
+
+      if (txRequest.from === undefined) {
+        throw new HardhatError(
+          ERRORS.NETWORK.MISSING_TX_PARAM_TO_SIGN_LOCALLY,
+          { param: "from" }
+        );
+      }
+
+      const hasGasPrice = txRequest.gasPrice !== undefined;
+      const hasEip1559Fields =
+        txRequest.maxFeePerGas !== undefined ||
+        txRequest.maxPriorityFeePerGas !== undefined;
+
+      if (!hasGasPrice && !hasEip1559Fields) {
+        throw new HardhatError(ERRORS.NETWORK.MISSING_FEE_PRICE_FIELDS);
+      }
+
+      if (hasGasPrice && hasEip1559Fields) {
+        throw new HardhatError(ERRORS.NETWORK.INCOMPATIBLE_FEE_PRICE_FIELDS);
+      }
+
+      if (hasEip1559Fields && txRequest.maxFeePerGas === undefined) {
+        throw new HardhatError(
+          ERRORS.NETWORK.MISSING_TX_PARAM_TO_SIGN_LOCALLY,
+          { param: "maxFeePerGas" }
+        );
+      }
+
+      if (hasEip1559Fields && txRequest.maxPriorityFeePerGas === undefined) {
+        throw new HardhatError(
+          ERRORS.NETWORK.MISSING_TX_PARAM_TO_SIGN_LOCALLY,
+          { param: "maxPriorityFeePerGas" }
+        );
+      }
+
+      console.log(1);
+
+      if (txRequest.nonce === undefined) {
+        txRequest.nonce = await this._getNonce(txRequest.from);
+      }
+
+      console.log(2);
+
+      const chainId = await this._getChainId();
+
+      const baseTx: ethers.utils.UnsignedTransaction = {
+        chainId,
+        data: txRequest.data,
+        gasLimit: txRequest.gas,
+        gasPrice: txRequest.gasPrice,
+        nonce: txRequest.nonce,
+        to: txRequest.to,
+        value: txRequest.value,
+      };
+
+      const txToSign = ethers.utils.serializeTransaction(baseTx).substring(2);
+
+      console.log("Base TX", baseTx);
+
+      const resolution = await ledgerService.resolveTransaction(
+        txToSign,
+        {},
+        {}
+      );
+      const signature = await this._eth.signTransaction(
+        this.options.path,
+        txToSign,
+        resolution
+      );
+
+      console.log("SIGNATURE", signature);
+      const rawTransaction = ethers.utils.serializeTransaction(baseTx, {
+        v: ethers.BigNumber.from("0x" + signature.v).toNumber(),
+        r: "0x" + signature.r,
+        s: "0x" + signature.s,
+      });
+
+      console.log("RAW TX", rawTransaction);
+
+      return "";
+
+      // return this._wrappedProvider.request({
+      //   method: "eth_sendRawTransaction",
+      //   params: [rawTransaction],
+      // });
+    }
+
     return this._wrappedProvider.request(args);
+  }
+
+  private async _getNonce(address: Buffer): Promise<bigint> {
+    const { bufferToHex } = await import("@nomicfoundation/ethereumjs-util");
+
+    const response = (await this._wrappedProvider.request({
+      method: "eth_getTransactionCount",
+      params: [bufferToHex(address), "pending"],
+    })) as string;
+
+    return rpcQuantityToBigInt(response);
   }
 
   public async init() {

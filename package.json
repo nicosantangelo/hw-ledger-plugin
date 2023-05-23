@@ -11,6 +11,8 @@
   "dependencies": {
     "@ledgerhq/hw-app-eth": "^6.33.1",
     "@ledgerhq/hw-transport-node-hid": "^6.27.13",
+    "@nomicfoundation/ethereumjs-common": "^4.0.1",
+    "@nomicfoundation/ethereumjs-tx": "^5.0.1",
     "@nomicfoundation/ethereumjs-util": "^9.0.1",
     "@nomicfoundation/hardhat-toolbox": "^2.0.2",
     "@nomiclabs/hardhat-ethers": "^2.2.3",

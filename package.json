@@ -8,13 +8,12 @@
   },
   "author": "",
   "license": "ISC",
-  "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox": "^2.0.2"
-  },
   "dependencies": {
     "@ledgerhq/hw-app-eth": "^6.33.1",
     "@ledgerhq/hw-transport-node-hid": "^6.27.13",
     "@nomicfoundation/ethereumjs-util": "^9.0.1",
-    "@nomiclabs/hardhat-ethers": "^2.2.3"
+    "@nomicfoundation/hardhat-toolbox": "^2.0.2",
+    "@nomiclabs/hardhat-ethers": "^2.2.3",
+    "io-ts": "^1.10.4"
   }
 }

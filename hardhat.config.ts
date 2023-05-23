@@ -12,6 +12,8 @@ import TransportNodeHid from "@ledgerhq/hw-transport-node-hid";
 import { TransportError } from "@ledgerhq/errors";
 import Eth from "@ledgerhq/hw-app-eth";
 
+import "@nomiclabs/hardhat-ethers";
+import * as t from "io-ts";
 import { validateParams } from "hardhat/internal/core/jsonrpc/types/input/validation";
 import {
   rpcAddress,
@@ -19,6 +21,7 @@ import {
 } from "hardhat/internal/core/jsonrpc/types/base-types";
 import { HardhatError } from "hardhat/src/internal/core/errors";
 import { ERRORS } from "hardhat/src/internal/core/errors-list";
+import { EIP712Message } from "@ledgerhq/hw-app-eth/lib/modules/EIP712";
 
 const config: HardhatUserConfig = {
   solidity: "0.8.18",
@@ -119,7 +122,58 @@ class LedgerProvider extends ProviderWrapper {
     }
 
     // Sign a prepared message following web3.eth.signTypedData specification. The host computes the domain separator and hashStruct(message)
-    // eth.signEIP712HashedMessage("44'/60'/0'/0/0", Buffer.from("0101010101010101010101010101010101010101010101010101010101010101").toString("hex"), Buffer.from("0202020202020202020202020202020202020202020202020202020202020202").toString("hex"))
+    // eth.signEIP721Message("44'/60'/0'/0/0", {
+    //   domain: { ... },
+    //   types: { ... },
+    //   primaryType: "Test",
+    //   message: {contents: "Hello, Bob!"},
+    // })
+    if (args.method === "eth_signTypedData_v4") {
+      const [_, data] = validateParams(params, rpcAddress, t.any as any);
+
+      if (data === undefined) {
+        throw new HardhatError(ERRORS.NETWORK.ETHSIGN_MISSING_DATA_PARAM);
+      }
+
+      let typedMessage: EIP712Message = data as EIP712Message;
+      if (typeof data === "string") {
+        try {
+          typedMessage = JSON.parse(data);
+        } catch {
+          throw new HardhatError(
+            ERRORS.NETWORK.ETHSIGN_TYPED_DATA_V4_INVALID_DATA_PARAM
+          );
+        }
+      }
+      const { types, domain, message, primaryType } = typedMessage;
+      const { EIP712Domain, ...structTypes } = types;
+
+      let signature;
+
+      try {
+        signature = await this._eth.signEIP712Message(
+          this.options.path,
+          typedMessage
+        );
+      } catch (error) {
+        signature = await this._eth.signEIP712HashedMessage(
+          this.options.path,
+          ethers.utils._TypedDataEncoder.hashDomain(domain),
+          ethers.utils._TypedDataEncoder.hashStruct(
+            primaryType,
+            structTypes,
+            message
+          )
+        );
+      }
+
+      // TODO: if we don't manage the address, the method is forwarded
+      return toRpcSig(
+        BigInt(signature.v - 27),
+        toBuffer("0x" + signature.r),
+        toBuffer("0x" + signature.s)
+      );
+    }
 
     // throw if not init?
     return this._wrappedProvider.request(args);

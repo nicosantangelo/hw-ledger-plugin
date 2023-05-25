@@ -1,7 +1,7 @@
 {
-  "name": "hh-tutorial",
+  "name": "hw-ledger-plugin",
   "version": "1.0.0",
-  "description": "Tutorial",
+  "description": "Use your Ledger",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

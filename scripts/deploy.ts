@@ -1,32 +1,35 @@
-import hre from "hardhat";
+import hre, { ethers } from "hardhat";
+import "@nomiclabs/hardhat-ethers";
 
 async function main() {
+  // These functions are set up to work with a particular Ledger address for convenience.
+  // To get a useful log, supply your own expected result as a second argument
+  const account = await ethAccounts();
+  await personalSign(account);
+  await ethSign(account);
+  await ethTypedSign(account);
+  await sendTransaction(account);
+}
+
+// Methods
+
+async function ethAccounts(
+  expectedResult = "0x8f649fe750340a295dddbbd7e1ec8f378cf24b43"
+) {
   const [account] = (await hre.network.provider.request({
     method: "eth_accounts",
   })) as string[];
-  console.log("METAMASK Account: 0x8f649fe750340a295dddbbd7e1ec8f378cf24b42");
-  console.log("Account", account);
+
+  console.log(`EXPECTED     Account: ${expectedResult}`);
+  console.log("eth_accounts Account:", account);
   console.log("\n");
-
-  // await personalSign(account);
-  // await ethSign(account);
-  // await ethTypedSign(account);
-
-  await hre.network.provider.request({
-    method: "eth_sendTransaction",
-    params: [
-      {
-        from: account,
-        to: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
-        value: "0x1",
-        gasPrice: `0x${(22).toString(16)}`,
-        gas: `0x${(22).toString(16)}`,
-      },
-    ],
-  });
+  return account;
 }
 
-async function personalSign(account: string) {
+async function personalSign(
+  account: string,
+  expectedResult = "0xdfbab2781f2b3086a954d05c8924e1f047cc85e18c6640a6077f4e2cae93f15b4bc225b8d7692da2d6e80f41edf0abfa1c9fb8300652ee3ece056787acda31ad00"
+) {
   const personalSignResult = await hre.network.provider.request({
     method: "personal_sign",
     params: [
@@ -34,14 +37,15 @@ async function personalSign(account: string) {
       account,
     ],
   });
-  console.log(
-    "METAMASK      Result: 0xdfbab2781f2b3086a954d05c8924e1f047cc85e18c6640a6077f4e2cae93f15b4bc225b8d7692da2d6e80f41edf0abfa1c9fb8300652ee3ece056787acda31ad00"
-  );
+  console.log(`EXPECTED      Result: ${expectedResult}`);
   console.log("personal_sign Result:", personalSignResult);
   console.log("\n");
 }
 
-async function ethSign(account: string) {
+async function ethSign(
+  account: string,
+  expectedResult = "0x095655e777e3c940cc1e9a509d584f73b1aea4edbb7722ddf830a9e0f8b2fc67478532aba93736e600250814a3b087a5ac179e5f10965aa543faa6b943117cf301"
+) {
   const ethSignResult = await hre.network.provider.request({
     method: "eth_sign",
     params: [
@@ -49,14 +53,15 @@ async function ethSign(account: string) {
       "0x7699f568ecd7753e6ddf75a42fa4c2cc86cbbdc704c9eb1a6b6d4b9d8b8d1519",
     ],
   });
-  console.log(
-    "METAMASK Result: 0x095655e777e3c940cc1e9a509d584f73b1aea4edbb7722ddf830a9e0f8b2fc67478532aba93736e600250814a3b087a5ac179e5f10965aa543faa6b943117cf301"
-  );
+  console.log(`EXPECTED      Result: ${expectedResult}`);
   console.log("eth_sign Result:", ethSignResult);
   console.log("\n");
 }
 
-async function ethTypedSign(account: string) {
+async function ethTypedSign(
+  account: string,
+  expectedResult = "0x66227cf0eb9710e328d68b1cf07a03638abd3c127fe2521c1843522eff689ffa2dcda378d5a8d2ccaecbbfb060b69775a02a05187a49d1fdcc367b2924bc014f00"
+) {
   const ethSignResultDataV4 = await hre.network.provider.request({
     method: "eth_signTypedData_v4",
     params: [
@@ -100,15 +105,76 @@ async function ethTypedSign(account: string) {
       },
     ],
   });
-  console.log(
-    "METAMASK             Result: 0x66227cf0eb9710e328d68b1cf07a03638abd3c127fe2521c1843522eff689ffa2dcda378d5a8d2ccaecbbfb060b69775a02a05187a49d1fdcc367b2924bc014f00"
-  );
+  console.log(`EXPECTED      Result: ${expectedResult}`);
   console.log("eth_signTypedData_v4 Result:", ethSignResultDataV4);
   console.log("\n");
 }
 
-// We recommend this pattern to be able to use async/await everywhere
-// and properly handle errors.
+async function sendTransaction(account: string) {
+  const provider = hre.network.provider as any;
+  await provider.init();
+
+  const baseWallet = new ethers.Wallet(
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    ethers.provider
+  );
+
+  await logBalance(baseWallet.address);
+  await logBalance(account);
+  console.log("-----");
+
+  await baseWallet.sendTransaction({
+    to: account,
+    value: ethers.utils.parseEther("4.0"),
+  });
+
+  await logBalance(baseWallet.address);
+  await logBalance(account);
+  console.log("-----");
+
+  const gasPrice = await hre.network.provider.request({
+    method: "eth_gasPrice",
+  });
+
+  await hre.network.provider.request({
+    method: "eth_sendTransaction",
+    params: [
+      {
+        from: account,
+        to: baseWallet.address,
+        value: numberToRpcQuantity(100),
+        gas: numberToRpcQuantity(1000000),
+        gasPrice,
+        gasLimit: numberToRpcQuantity(1000000),
+      },
+    ],
+  });
+
+  await logBalance(baseWallet.address);
+  await logBalance(account);
+}
+
+// Utils
+
+async function logBalance(account: string) {
+  const myBalance = (await hre.network.provider.request({
+    method: "eth_getBalance",
+    params: [account, "latest"],
+  })) as string;
+  console.log(
+    "Balance of",
+    account,
+    ":",
+    ethers.utils.formatEther(myBalance),
+    "-",
+    myBalance
+  );
+}
+
+function numberToRpcQuantity(n: number | bigint): string {
+  return `0x${n.toString(16)}`;
+}
+
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;

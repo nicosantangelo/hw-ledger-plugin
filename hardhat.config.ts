@@ -179,7 +179,7 @@ export class LedgerProvider extends ProviderWrapperWithChainId {
       }
 
       // If we don't manage the address, the method is forwarded
-      if (await this._isControlledAddress(address.toString("hex"))) {
+      if (await this._isControlledAddress(address)) {
         const { types, domain, message, primaryType } = typedMessage;
         const { EIP712Domain, ...structTypes } = types;
 
@@ -255,7 +255,7 @@ export class LedgerProvider extends ProviderWrapperWithChainId {
       }
 
       // If we don't manage the address, the method is forwarded
-      if (await this._isControlledAddress(txRequest.from.toString("hex"))) {
+      if (await this._isControlledAddress(txRequest.from)) {
         if (txRequest.nonce === undefined) {
           txRequest.nonce = await this._getNonce(txRequest.from);
         }
@@ -324,12 +324,15 @@ export class LedgerProvider extends ProviderWrapperWithChainId {
     return rpcQuantityToBigInt(response);
   }
 
-  private async _isControlledAddress(address: string): Promise<boolean> {
+  private async _isControlledAddress(address: Buffer): Promise<boolean> {
     const [controlledAddress] = (await this.request({
       method: "eth_accounts",
     })) as string[];
 
-    return controlledAddress.toLowerCase() === address.toLowerCase();
+    return (
+      controlledAddress.toLowerCase() ===
+      "0x" + address.toString("hex").toLowerCase()
+    );
   }
 }
 

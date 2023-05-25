@@ -14,7 +14,7 @@ async function main() {
 // Methods
 
 async function ethAccounts(
-  expectedResult = "0x8f649fe750340a295dddbbd7e1ec8f378cf24b43"
+  expectedResult = "0x9f649FE750340A295dDdbBd7e1EC8f378cF24b43"
 ) {
   const [account] = (await hre.network.provider.request({
     method: "eth_accounts",
@@ -53,7 +53,7 @@ async function ethSign(
       "0x7699f568ecd7753e6ddf75a42fa4c2cc86cbbdc704c9eb1a6b6d4b9d8b8d1519",
     ],
   });
-  console.log(`EXPECTED      Result: ${expectedResult}`);
+  console.log(`EXPECTED Result: ${expectedResult}`);
   console.log("eth_sign Result:", ethSignResult);
   console.log("\n");
 }
@@ -105,7 +105,7 @@ async function ethTypedSign(
       },
     ],
   });
-  console.log(`EXPECTED      Result: ${expectedResult}`);
+  console.log(`EXPECTED             Result: ${expectedResult}`);
   console.log("eth_signTypedData_v4 Result:", ethSignResultDataV4);
   console.log("\n");
 }

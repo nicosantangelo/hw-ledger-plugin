@@ -22,7 +22,10 @@ import {
   rpcQuantityToBigInt,
 } from "hardhat/internal/core/jsonrpc/types/base-types";
 import { ProviderWrapperWithChainId } from "hardhat/src/internal/core/providers/chainId";
-import { HardhatError } from "hardhat/src/internal/core/errors";
+import {
+  HardhatError,
+  NomicLabsHardhatPluginError,
+} from "hardhat/src/internal/core/errors";
 import { ERRORS } from "hardhat/src/internal/core/errors-list";
 
 const config: HardhatUserConfig = {
@@ -30,13 +33,19 @@ const config: HardhatUserConfig = {
 };
 export default config;
 
+type Signature = {
+  v: number;
+  s: string;
+  r: string;
+};
+
 export interface LedgerOptions {
   path: string;
   openTimeout?: number;
   connectionTimeout?: number;
 }
 
-class LedgerProvider extends ProviderWrapperWithChainId {
+export class LedgerProvider extends ProviderWrapperWithChainId {
   public static readonly DEFAULT_TIMEOUT = 3000;
 
   public name: string = "LedgerProvider";
@@ -60,16 +69,45 @@ class LedgerProvider extends ProviderWrapperWithChainId {
     super(_wrappedProvider);
   }
 
-  public async request(args: RequestArguments): Promise<unknown> {
-    const { toRpcSig, toBuffer, bufferToHex } = await import(
-      "@nomicfoundation/ethereumjs-util"
-    );
+  public async init() {
+    if (!this._eth && !this._isCreatingTransport) {
+      this._isCreatingTransport = true;
+      const openTimeout =
+        this.options.openTimeout || LedgerProvider.DEFAULT_TIMEOUT;
+      const connectionTimeout =
+        this.options.connectionTimeout || LedgerProvider.DEFAULT_TIMEOUT;
 
+      try {
+        const transport = await TransportNodeHid.create(
+          openTimeout,
+          connectionTimeout
+        );
+        this._eth = new Eth(transport);
+      } catch (error) {
+        if (error instanceof Error) {
+          let errorMessage = `There was an error trying to stablish a connection to the Ledger wallet: "${error.message}".`;
+
+          if (error.name === "TransportError") {
+            const transportError = error as TransportError;
+            errorMessage += ` The error id was: ${transportError.id}`;
+          }
+          throw new NomicLabsHardhatPluginError(
+            "@nomiclabs/hardhat-ledger",
+            errorMessage
+          );
+        }
+
+        throw error;
+      }
+      this._isCreatingTransport = false;
+    }
+  }
+
+  public async request(args: RequestArguments): Promise<unknown> {
     const params = this._getParams(args);
 
     if (this._eth === undefined) {
-      // TODO: better error
-      throw new Error();
+      throw new HardhatError(ERRORS.GENERAL.UNINITIALIZED_PROVIDER);
     }
 
     // get Ethereum address for a given BIP 32 path.
@@ -110,11 +148,7 @@ class LedgerProvider extends ProviderWrapperWithChainId {
             data.toString("hex")
           );
 
-          return toRpcSig(
-            BigInt(signature.v - 27),
-            toBuffer("0x" + signature.r),
-            toBuffer("0x" + signature.s)
-          );
+          return await this._toRpcSig(signature);
         }
       }
     }
@@ -127,7 +161,7 @@ class LedgerProvider extends ProviderWrapperWithChainId {
     //   message: {contents: "Hello, Bob!"},
     // })
     if (args.method === "eth_signTypedData_v4") {
-      const [_, data] = validateParams(params, rpcAddress, t.any as any);
+      const [address, data] = validateParams(params, rpcAddress, t.any as any);
 
       if (data === undefined) {
         throw new HardhatError(ERRORS.NETWORK.ETHSIGN_MISSING_DATA_PARAM);
@@ -143,42 +177,39 @@ class LedgerProvider extends ProviderWrapperWithChainId {
           );
         }
       }
-      const { types, domain, message, primaryType } = typedMessage;
-      const { EIP712Domain, ...structTypes } = types;
 
-      let signature;
+      // If we don't manage the address, the method is forwarded
+      if (await this._isControlledAddress(address.toString("hex"))) {
+        const { types, domain, message, primaryType } = typedMessage;
+        const { EIP712Domain, ...structTypes } = types;
 
-      try {
-        signature = await this._eth.signEIP712Message(
-          this.options.path,
-          typedMessage
-        );
-      } catch (error) {
-        signature = await this._eth.signEIP712HashedMessage(
-          this.options.path,
-          ethers.utils._TypedDataEncoder.hashDomain(domain),
-          ethers.utils._TypedDataEncoder.hashStruct(
-            primaryType,
-            structTypes,
-            message
-          )
-        );
+        let signature;
+
+        try {
+          signature = await this._eth.signEIP712Message(
+            this.options.path,
+            typedMessage
+          );
+        } catch (error) {
+          signature = await this._eth.signEIP712HashedMessage(
+            this.options.path,
+            ethers.utils._TypedDataEncoder.hashDomain(domain),
+            ethers.utils._TypedDataEncoder.hashStruct(
+              primaryType,
+              structTypes,
+              message
+            )
+          );
+        }
+
+        return await this._toRpcSig(signature);
       }
-
-      // TODO: if we don't manage the address, the method is forwarded
-      return toRpcSig(
-        BigInt(signature.v - 27),
-        toBuffer("0x" + signature.r),
-        toBuffer("0x" + signature.s)
-      );
     }
 
     // You can sign a transaction and retrieve v, r, s given the raw transaction and the BIP 32 path of the account to sign.
     // const tx = "e8018504e3b292008252089428ee52a8f3d6e5d15f8b131996950d7f296c7952872bd72a2487400080"; // raw tx to sign
     // const resolution = await ledgerService.resolveTransaction(tx);
     // const result = eth.signTransaction("44'/60'/0'/0/0", tx, resolution);
-    // console.log(result);
-
     if (args.method === "eth_sendTransaction" && params.length > 0) {
       const [txRequest] = validateParams(params, rpcTransactionRequest);
 
@@ -223,59 +254,63 @@ class LedgerProvider extends ProviderWrapperWithChainId {
         );
       }
 
-      console.log(1);
+      // If we don't manage the address, the method is forwarded
+      if (await this._isControlledAddress(txRequest.from.toString("hex"))) {
+        if (txRequest.nonce === undefined) {
+          txRequest.nonce = await this._getNonce(txRequest.from);
+        }
 
-      if (txRequest.nonce === undefined) {
-        txRequest.nonce = await this._getNonce(txRequest.from);
+        const chainId = await this._getChainId();
+
+        const baseTx: ethers.utils.UnsignedTransaction = {
+          chainId,
+          data: txRequest.data,
+          gasLimit: txRequest.gas,
+          gasPrice: txRequest.gasPrice,
+          nonce: txRequest.nonce,
+          to: txRequest.to,
+          value: txRequest.value,
+        };
+
+        const txToSign = ethers.utils.serializeTransaction(baseTx).substring(2);
+
+        const resolution = await ledgerService.resolveTransaction(
+          txToSign,
+          {},
+          {}
+        );
+        const signature = await this._eth.signTransaction(
+          this.options.path,
+          txToSign,
+          resolution
+        );
+
+        const rawTransaction = ethers.utils.serializeTransaction(baseTx, {
+          v: ethers.BigNumber.from("0x" + signature.v).toNumber(),
+          r: "0x" + signature.r,
+          s: "0x" + signature.s,
+        });
+
+        return this._wrappedProvider.request({
+          method: "eth_sendRawTransaction",
+          params: [rawTransaction],
+        });
       }
-
-      console.log(2);
-
-      const chainId = await this._getChainId();
-
-      const baseTx: ethers.utils.UnsignedTransaction = {
-        chainId,
-        data: txRequest.data,
-        gasLimit: txRequest.gas,
-        gasPrice: txRequest.gasPrice,
-        nonce: txRequest.nonce,
-        to: txRequest.to,
-        value: txRequest.value,
-      };
-
-      const txToSign = ethers.utils.serializeTransaction(baseTx).substring(2);
-
-      console.log("Base TX", baseTx);
-
-      const resolution = await ledgerService.resolveTransaction(
-        txToSign,
-        {},
-        {}
-      );
-      const signature = await this._eth.signTransaction(
-        this.options.path,
-        txToSign,
-        resolution
-      );
-
-      console.log("SIGNATURE", signature);
-      const rawTransaction = ethers.utils.serializeTransaction(baseTx, {
-        v: ethers.BigNumber.from("0x" + signature.v).toNumber(),
-        r: "0x" + signature.r,
-        s: "0x" + signature.s,
-      });
-
-      console.log("RAW TX", rawTransaction);
-
-      return "";
-
-      // return this._wrappedProvider.request({
-      //   method: "eth_sendRawTransaction",
-      //   params: [rawTransaction],
-      // });
     }
 
     return this._wrappedProvider.request(args);
+  }
+
+  private async _toRpcSig(signature: Signature): Promise<string> {
+    const { toRpcSig, toBuffer } = await import(
+      "@nomicfoundation/ethereumjs-util"
+    );
+
+    return toRpcSig(
+      BigInt(signature.v - 27),
+      toBuffer("0x" + signature.r),
+      toBuffer("0x" + signature.s)
+    );
   }
 
   private async _getNonce(address: Buffer): Promise<bigint> {
@@ -289,44 +324,16 @@ class LedgerProvider extends ProviderWrapperWithChainId {
     return rpcQuantityToBigInt(response);
   }
 
-  public async init() {
-    if (!this._eth && !this._isCreatingTransport) {
-      this._isCreatingTransport = true;
-      const openTimeout =
-        this.options.openTimeout || LedgerProvider.DEFAULT_TIMEOUT;
-      const connectionTimeout =
-        this.options.connectionTimeout || LedgerProvider.DEFAULT_TIMEOUT;
+  private async _isControlledAddress(address: string): Promise<boolean> {
+    const [controlledAddress] = (await this.request({
+      method: "eth_accounts",
+    })) as string[];
 
-      try {
-        const transport = await TransportNodeHid.create(
-          openTimeout,
-          connectionTimeout
-        );
-        this._eth = new Eth(transport);
-      } catch (error) {
-        if (error instanceof Error) {
-          let errorMessage = `There was an error trying to stablish a connection to the Ledger wallet: "${error.message}".`;
-
-          if (error.name === "TransportError") {
-            const transportError = error as TransportError;
-            errorMessage += ` The error id was: ${transportError.id}`;
-          }
-          // throw NomicLabsHardhatPluginError(
-          //   "@nomiclabs/hardhat-ledger",
-          //   errorMessage
-          // )
-          throw new Error(errorMessage);
-        }
-
-        throw error;
-      }
-      this._isCreatingTransport = false;
-    }
+    return controlledAddress.toLowerCase() === address.toLowerCase();
   }
 }
 
 extendProvider(
-  async (provider: EIP1193Provider, config: HardhatConfig, network: string) => {
-    return await LedgerProvider.create({ path: "44'/60'/0'/0" }, provider);
-  }
+  async (provider: EIP1193Provider, config: HardhatConfig, network: string) =>
+    LedgerProvider.create({ path: "44'/60'/0'/0" }, provider)
 );

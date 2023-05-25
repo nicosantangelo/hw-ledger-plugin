@@ -1,13 +1,23 @@
-# Sample Hardhat Project
+# Hardhat Ledger Plugin
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a script that deploys that contract.
-
-Try running some of the following tasks:
+This project is still in development. To test it you'll have to link a hardhat version running the [feat/extend-providers](https://github.com/NomicFoundation/hardhat/tree/feat/extend-providers) branch, tracked in [this PR](https://github.com/NomicFoundation/hardhat/pull/3932#pullrequestreview-1442364041).
 
 ```shell
-npx hardhat help
-npx hardhat test
-REPORT_GAS=true npx hardhat test
-npx hardhat node
-npx hardhat run scripts/deploy.ts
+git clone git clone git@github.com:NomicFoundation/hardhat.git
+cd hardhat
+git checkout feat/extend-providers
+npm link
+npx yarn watch
 ```
+
+```shell
+cd hw-ledger-plugin.git
+npm i
+npm link hardhat
+npx hardhat run scripts/test-plugin.ts
+```
+
+## TODO
+
+- [ ] Configuration
+- [ ] Tests
